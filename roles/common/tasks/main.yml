@@ -1,0 +1,21 @@
+- name: Install common dependencies
+  apt:
+    name:
+      - apt-transport-https
+      - curl
+      - gnupg
+      - lsb-release
+      - software-properties-common
+    state: present
+    update_cache: yes
+
+- name: Disable swap
+  command: swapoff -a
+  become: true
+
+- name: Remove swap entry from fstab
+  replace:
+    path: /etc/fstab
+    regexp: '(^.*swap.*$)'
+    replace: '# \1'
+  become: true

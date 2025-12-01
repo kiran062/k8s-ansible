@@ -1,0 +1,17 @@
+- hosts: k8s_cluster
+  become: true
+  roles:
+    - common
+    - docker
+
+- hosts: masters
+  become: true
+  vars:
+    pod_network_cidr: "192.168.0.0/16"
+  roles:
+    - kube-master
+
+- hosts: workers
+  become: true
+  roles:
+    - kube-node
