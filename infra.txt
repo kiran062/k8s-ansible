@@ -1,0 +1,315 @@
+Below is a complete, detailed, step-by-step process to create every AWS resource required for your architecture.
+These steps are written in the exact order you must follow in the AWS Console.
+
+1. Create VPC
+Step 1.1: Open VPC Console
+
+AWS Console → Services → VPC → Create VPC
+
+Step 1.2: Choose "VPC Only"
+
+Fill the fields:
+
+Name: my-vpc
+
+IPv4 CIDR: 10.0.0.0/16
+
+Tenancy: default
+
+Create
+
+VPC is created.
+
+2. Create Subnets
+Step 2.1: Create Public Subnet
+
+Navigate: VPC → Subnets → Create Subnet
+
+VPC: my-vpc
+
+Subnet name: public-subnet
+
+Availability Zone: choose any (ex: ap-south-1a)
+
+CIDR block: 10.0.1.0/24
+
+Click Create.
+
+Step 2.2: Enable Auto-Assign Public IPv4
+
+Select public-subnet → Actions → Edit Subnet Settings →
+Enable "Auto-assign public IPv4 address".
+
+Step 2.3: Create Private Subnet
+
+Create another subnet with:
+
+Name: private-subnet
+
+CIDR block: 10.0.2.0/24
+
+AZ: same or different, both fine
+
+Create.
+
+3. Create and Attach Internet Gateway
+Step 3.1: Create IGW
+
+VPC → Internet Gateways → Create Internet Gateway
+
+Name: my-igw
+Create.
+
+Step 3.2: Attach to VPC
+
+Select IGW → Actions → Attach to VPC → Choose my-vpc → Attach.
+
+4. Create Public Route Table
+Step 4.1: Create Route Table
+
+VPC → Route Tables → Create Route Table
+
+Name: public-rt
+
+VPC: my-vpc
+
+Create.
+
+Step 4.2: Add Default Internet Route
+
+Select public-rt → Routes → Edit Routes
+
+Add:
+
+Destination: 0.0.0.0/0
+
+Target: Internet Gateway (my-igw)
+
+Save.
+
+Step 4.3: Associate with Public Subnet
+
+public-rt → Subnet Associations → Edit → Select public-subnet → Save.
+
+5. Create Private Route Table
+Step 5.1: Create Private RT
+
+VPC → Route Tables → Create Route Table
+
+Name: private-rt
+
+VPC: my-vpc
+
+Create.
+
+Step 5.2: Associate with Private Subnet
+
+private-rt → Subnet associations → Edit → Select private-subnet → Save.
+
+Step 5.3: Do NOT add internet route yet
+
+(Currently private subnet has no internet — correct.)
+
+6. Launch Public EC2 Instance (Routing / Nginx / Jump Host)
+Step 6.1: EC2 → Launch Instance
+
+Name: public-ec2
+
+AMI: Amazon Linux 2 or Ubuntu
+
+Instance type: t2.micro
+
+Network: my-vpc
+
+Subnet: public-subnet
+
+Auto-assign public IP: Enable
+
+Security group: Create new
+
+SG configuration:
+
+Inbound:
+
+SSH (22) — your IP
+
+HTTP (80)
+
+HTTPS (443)
+
+Outbound:
+
+All traffic (default)
+
+Launch the instance.
+
+Step 6.2: Allocate and Attach Elastic IP
+
+EC2 → Elastic IPs → Allocate → Associate with public-ec2.
+
+7. Launch Private EC2 Instances
+Step 7.1: EC2 → Launch Instance
+
+Name: private-ec2-1
+
+Network: my-vpc
+
+Subnet: private-subnet
+
+Auto-assign public IP: Disable
+
+Security group: Create new
+
+Private SG inbound rules:
+
+Allow app ports only from public-ec2 SG
+Example:
+
+8080 → source: SG of public EC2
+
+22 (optional for internal SSH) → source: SG of public EC2
+
+Outbound: Default allowed.
+
+Launch instance.
+
+Repeat for private-ec2-2.
+
+8. Configure Nginx Reverse Proxy on Public EC2
+Step 8.1: Install Nginx
+
+On public EC2:
+
+For Amazon Linux:
+
+sudo yum install nginx -y
+sudo systemctl enable nginx
+sudo systemctl start nginx
+
+
+For Ubuntu:
+
+sudo apt update
+sudo apt install nginx -y
+sudo systemctl enable nginx
+sudo systemctl start nginx
+
+Step 8.2: Add Reverse Proxy Config
+
+Edit:
+
+sudo nano /etc/nginx/conf.d/apps.conf
+
+
+Example config:
+
+server {
+    listen 80;
+    server_name _;
+
+    location /service1/ {
+        proxy_pass http://10.0.2.10:8080/;
+    }
+
+    location /service2/ {
+        proxy_pass http://10.0.2.11:8080/;
+    }
+}
+
+Step 8.3: Restart Nginx
+sudo nginx -t
+sudo systemctl restart nginx
+
+9. Create NAT Gateway (Temporary Internet for Private EC2s)
+Step 9.1: Create Elastic IP for NAT
+
+VPC → Elastic IPs → Allocate.
+
+Step 9.2: Create NAT Gateway
+
+VPC → NAT Gateways → Create NAT Gateway
+
+Subnet: public-subnet
+
+Elastic IP: choose allocated EIP
+
+Name: nat-gateway
+
+Create.
+
+Step 9.3: Add Internet Route for Private Subnet
+
+private-rt → Routes → Edit Routes → Add:
+
+Destination: 0.0.0.0/0
+
+Target: NAT Gateway (nat-gateway)
+
+Save.
+
+Private EC2s now have internet for updates.
+
+10. Remove Internet After Updates (As per Your Requirement)
+
+Once updates are done on private servers:
+
+Step 10.1 Remove Route
+
+private-rt → Routes → Delete:
+
+0.0.0.0/0 → NAT Gateway
+
+Save.
+
+Private EC2s lose internet (but maintain internal access from public EC2).
+
+Step 10.2 (Optional) Delete NAT Gateway to Reduce Cost
+
+NAT Gateway charges per hour + data processing.
+Delete it when not needed.
+
+11. Test the Architecture
+11.1 Application Access
+
+Use public EC2’s Elastic IP:
+
+http://<public-ec2-ip>/service1/
+
+
+Should reach private EC2-1.
+
+http://<public-ec2-ip>/service2/
+
+
+Should reach private EC2-2.
+
+11.2 SSH Access to Private EC2
+
+SSH to public EC2:
+
+ssh ec2-user@public-ec2
+
+
+Then from public EC2:
+
+ssh ec2-user@10.0.2.x
+
+12. Summary of Components You Created
+Resource	Location	Purpose
+VPC	10.0.0.0/16	Network boundary
+Public Subnet	10.0.1.0/24	Public EC2, IGW, NAT
+Private Subnet	10.0.2.0/24	Private EC2s
+Internet Gateway	VPC	Public internet access
+Public Route Table	0.0.0.0/0 → IGW	For public-subnet
+Private Route Table	No internet	Secure environment
+Public EC2	public-subnet	Reverse proxy & jump box
+Private EC2s	private-subnet	Application servers
+NAT Gateway	public-subnet	Temporary internet for updates
+
+
+
+
+aws ec2 create-route   --route-table-id rtb-08582cffdc2144575   --destination-cidr-block 0.0.0.0/0   --nat-gateway-id nat-09f31d471e1c6907c^C
+aws ec2 delete-route   --route-table-id rtb-08582cffdc2144575   --destination-cidr-block 0.0.0.0/0
+
+
