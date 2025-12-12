@@ -1,0 +1,70 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway-ingress
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+
+    # ---- TIMEOUTS (300 seconds) ----
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"   # optional (no limit)
+
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - apigw-k8s.honebi.online
+      secretName: gateway-tls
+
+  rules:
+    - host: apigw-k8s.honebi.online
+      http:
+        paths:
+          - path: /gateway(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: gateway-service
+                port:
+                  number: 30000
+
+
+
+
+
+
+
+
+
+
+
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ecom-ingress
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - rdp-k8s.honebi.online
+      secretName: gateway-tls
+
+  rules:
+    - host: rdp-k8s.honebi.online
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ecom-service
+                port:
+                  number: 5000
