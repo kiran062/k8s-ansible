@@ -1,0 +1,316 @@
+Target Architecture (What we are building)
+Internet
+   ↓
+Elastic IP (AWS EC2 – Public Subnet)
+   ↓
+NGINX Reverse Proxy
+   ↓
+WireGuard VPN Tunnel
+   ↓
+Local Network (192.168.1.0/24)
+   ↓
+Local VM (192.168.1.181:PORT)
+
+
+AWS becomes the public gateway.
+Your laptop / local VM remains private, safely behind NAT.
+
+Prerequisites
+
+AWS account
+
+Elastic IP available
+
+Local VM running Linux
+
+Router allows outbound UDP
+
+A service running locally (example: 192.168.1.181:3000)
+
+STEP 1: Create AWS Infrastructure
+1.1 Create VPC
+
+CIDR: 10.0.0.0/16
+
+1.2 Create Subnet
+
+Public subnet: 10.0.1.0/24
+
+Enable Auto-assign public IPv4
+
+1.3 Internet Gateway
+
+Create IGW
+
+Attach to VPC
+
+1.4 Route Table (Public)
+
+Add:
+
+0.0.0.0/0 → Internet Gateway
+
+
+Associate with public subnet.
+
+STEP 2: Launch EC2 (Public Gateway)
+2.1 Instance
+
+AMI: Ubuntu 22.04
+
+Type: t3.micro
+
+Subnet: Public
+
+Public IP: Disabled (we’ll use EIP)
+
+2.2 Security Group
+
+Allow:
+
+SSH        TCP 22     Your IP
+HTTPS      TCP 443    0.0.0.0/0
+WireGuard  UDP 51820  0.0.0.0/0
+
+2.3 Attach Elastic IP
+
+Allocate EIP
+
+Associate with EC2
+
+STEP 3: Install WireGuard (AWS EC2)
+sudo apt update
+sudo apt install -y wireguard iptables-persistent
+
+Generate keys
+wg genkey | tee server.key | wg pubkey > server.pub
+
+Configure WireGuard (Server)
+sudo nano /etc/wireguard/wg0.conf
+
+[Interface]
+Address = 10.100.0.1/24
+ListenPort = 51820
+PrivateKey = <SERVER_PRIVATE_KEY>
+
+PostUp   = iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
+
+Enable forwarding:
+
+echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+
+Start WireGuard:
+
+sudo systemctl enable wg-quick@wg0
+sudo systemctl start wg-quick@wg0
+
+STEP 4: Configure WireGuard on Local VM
+Install WireGuard
+sudo apt install -y wireguard
+
+Generate keys
+wg genkey | tee client.key | wg pubkey > client.pub
+
+Configure client
+sudo nano /etc/wireguard/wg0.conf
+
+[Interface]
+Address = 10.100.0.2/24
+PrivateKey = <CLIENT_PRIVATE_KEY>
+
+[Peer]
+PublicKey = <SERVER_PUBLIC_KEY>
+Endpoint = <ELASTIC_IP>:51820
+AllowedIPs = 10.100.0.0/24,10.0.0.0/16
+PersistentKeepalive = 25
+
+
+Start:
+
+sudo systemctl enable wg-quick@wg0
+sudo systemctl start wg-quick@wg0
+
+
+Verify:
+
+ping 10.100.0.1
+
+STEP 5: Add Peer on AWS EC2
+
+Edit server config:
+
+sudo nano /etc/wireguard/wg0.conf
+
+
+Add:
+
+[Peer]
+PublicKey = <CLIENT_PUBLIC_KEY>
+AllowedIPs = 10.100.0.2/32,192.168.1.0/24
+
+
+Restart:
+
+sudo systemctl restart wg-quick@wg0
+
+STEP 6: Routing (CRITICAL)
+On AWS EC2
+sudo ip route add 192.168.1.0/24 dev wg0
+
+On Local VM
+sudo ip route add 10.0.0.0/16 dev wg0
+
+STEP 7: Install NGINX on AWS EC2
+sudo apt install -y nginx
+
+STEP 8: Configure NGINX Reverse Proxy
+sudo nano /etc/nginx/sites-available/local-app
+
+server {
+    listen 80;
+    server_name _;
+
+    location / {
+        proxy_pass http://192.168.1.181:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+}
+
+
+Enable:
+
+sudo ln -s /etc/nginx/sites-available/local-app /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl restart nginx
+
+STEP 9: Test End-to-End
+
+From browser:
+
+http://<ELASTIC_IP>
+
+
+Traffic flow:
+
+Browser → AWS EIP → NGINX → WireGuard → Local VM
+
+STEP 10: (Optional) HTTPS
+
+You have two choices:
+
+Option A: TLS at AWS (Recommended)
+
+Use Let’s Encrypt on EC2
+
+Certbot + NGINX
+
+Option B: TLS at Local VM
+
+NGINX passes TCP
+
+Local service handles HTTPS
+
+What You Achieved
+
+✔ Local VM exposed without public IP
+✔ No NAT Gateway needed
+✔ No ISP port forwarding
+✔ Secure encrypted tunnel
+✔ Production-grade architecture
+
+
+
+
+
+
+
+
+STEP 3: Enable IP forwarding (MANDATORY)
+
+Run exactly once:
+
+echo "net.ipv4.ip_forward=1" | sudo tee /etc/sysctl.d/99-wireguard.conf
+sudo sysctl --system
+
+
+Verify:
+
+sysctl net.ipv4.ip_forward
+
+
+Expected:
+
+net.ipv4.ip_forward = 1
+
+
+
+
+
+5. VERY IMPORTANT: Add the peer (if not done yet)
+
+On AWS EC2, your /etc/wireguard/wg0.conf must include a peer:
+
+[Peer]
+PublicKey = <CLIENT_PUBLIC_KEY>
+AllowedIPs = 10.100.0.2/32,192.168.1.0/24
+
+
+Without this:
+
+Route exists
+
+Tunnel exists
+
+Traffic will silently drop
+
+After adding:
+
+sudo systemctl restart wg-quick@wg0
+
+
+
+Step-by-step fix (do these in order)
+STEP 1: Check WireGuard status on AWS EC2
+
+On AWS EC2:
+
+sudo wg show
+
+Expected (example)
+
+You MUST see something like:
+
+interface: wg0
+  listening port: 51820
+
+peer: <CLIENT_PUBLIC_KEY>
+  endpoint: <CLIENT_PUBLIC_IP>:xxxxx
+  allowed ips: 10.100.0.2/32, 192.168.1.0/24
+  latest handshake: X seconds ago
+  transfer: xx KiB received, xx KiB sent
+
+If you see NO peer
+
+→ Client is not added on server
+
+If you see no “latest handshake”
+
+→ Client is not connected
+
+
+
+
+MAIN RULE*******************************************************************
+STEP 5: SECURITY GROUP CHECK (very common failure)
+
+AWS EC2 Security Group MUST allow:
+
+Type	Protocol	Port	Source
+Custom UDP	UDP	51820	0.0.0.0/0
+
+If this rule is missing → no handshake ever
