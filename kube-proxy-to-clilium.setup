@@ -1,0 +1,105 @@
+🎯 Goal
+
+Move from:
+
+Cilium + kube-proxy
+
+
+To:
+
+Cilium (kube-proxy replacement enabled)
+
+
+Without breaking networking.
+
+🧠 Step 1 — Get Your API Server IP
+
+Since this is kubeadm (not EKS), your API server is running on master.
+
+Run:
+
+kubectl cluster-info
+
+
+You’ll see something like:
+
+Kubernetes control plane is running at https://10.0.1.184:6443
+
+
+👉 That 10.0.1.184 is your k8sServiceHost.
+
+🛠 Step 2 — Upgrade Cilium (Enable kube-proxy replacement)
+
+Now run:
+
+helm upgrade cilium cilium/cilium \
+  --namespace kube-system \
+  --set kubeProxyReplacement=true \
+  --set k8sServiceHost=10.0.1.184 \
+  --set k8sServicePort=6443
+
+
+(Replace IP if different.)
+
+This tells Cilium:
+
+"You handle service routing now. Not kube-proxy."
+
+⏳ Step 3 — Wait for rollout
+kubectl -n kube-system rollout status daemonset/cilium
+
+
+Wait until it says successfully rolled out.
+
+🔍 Step 4 — Verify Replacement Is Active
+
+Run:
+
+kubectl -n kube-system exec ds/cilium -- cilium status
+
+
+Look for:
+
+KubeProxyReplacement:   Strict
+
+
+If you see Strict → 🔥 you’re fully running eBPF service routing.
+
+🧨 Step 5 — Remove kube-proxy (ONLY After Confirming)
+
+Once status is good:
+
+kubectl -n kube-system delete ds kube-proxy
+
+
+Check:
+
+kubectl get pods -A
+
+
+Test:
+
+kubectl run test --image=nginx
+kubectl expose pod test --port=80
+
+
+Access service from another pod.
+
+If it works → you’re golden.
+
+🧠 What Just Happened Under the Hood?
+
+Before:
+
+Pod → iptables → kube-proxy → Service → Pod
+
+
+Now:
+
+Pod → eBPF (kernel-level) → Service → Pod
+
+
+No iptables.
+No kube-proxy.
+Lower latency.
+Better scalability.
