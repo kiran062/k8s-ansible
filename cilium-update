@@ -1,0 +1,63 @@
+#!/bin/bash
+
+set -e
+
+echo "========================================="
+echo "Updating Cilium & Enabling Kube-Proxy Replacement"
+echo "========================================="
+
+# Detect API server IP automatically
+API_SERVER_IP=$(hostname -i)
+
+echo "Using API Server IP: $API_SERVER_IP"
+
+echo "-----------------------------------------"
+echo "1. Upgrading Cilium with kube-proxy replacement"
+echo "-----------------------------------------"
+
+helm upgrade cilium cilium/cilium \
+  --namespace kube-system \
+  --set kubeProxyReplacement=true \
+  --set routingMode=tunnel \
+  --set k8sServiceHost=${API_SERVER_IP} \
+  --set k8sServicePort=6443
+
+echo "-----------------------------------------"
+echo "2. Restarting Cilium pods"
+echo "-----------------------------------------"
+
+kubectl -n kube-system delete pod -l k8s-app=cilium
+
+echo "Waiting for Cilium to become ready..."
+sleep 15
+kubectl -n kube-system rollout status ds/cilium
+
+echo "-----------------------------------------"
+echo "3. Verifying kube-proxy replacement status"
+echo "-----------------------------------------"
+
+kubectl -n kube-system get configmap cilium-config -o yaml | grep kube-proxy-replacement
+
+echo "-----------------------------------------"
+echo "4. Checking Cilium status"
+echo "-----------------------------------------"
+
+kubectl -n kube-system exec -it ds/cilium -- cilium status
+
+echo "-----------------------------------------"
+echo "5. Removing kube-proxy"
+echo "-----------------------------------------"
+
+kubectl -n kube-system delete daemonset kube-proxy --ignore-not-found=true
+kubectl -n kube-system delete configmap kube-proxy --ignore-not-found=true
+
+echo "-----------------------------------------"
+echo "6. Final validation"
+echo "-----------------------------------------"
+
+kubectl -n kube-system get pods
+kubectl -n kube-system get pods | grep proxy || echo "kube-proxy successfully removed"
+
+echo "========================================="
+echo "Cilium upgrade complete. Cluster is now kube-proxy free."
+echo "========================================="
