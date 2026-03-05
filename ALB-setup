@@ -1,0 +1,226 @@
+Since you are running self-managed Kubernetes on EC2 (1 master + 1 worker) and you want:
+
+✅ Services remain ClusterIP
+
+✅ Expose through ALB
+
+✅ Worker nodes in private subnet
+
+✅ Simple setup
+
+The cleanest method is:
+
+Internet
+   │
+   ▼
+ALB (Public Subnet)
+   │
+   ▼
+NGINX Ingress Controller (NodePort)
+   │
+   ▼
+ClusterIP Services
+   │
+   ▼
+Pods
+
+Only Nginx Ingress uses NodePort, your application services stay ClusterIP.
+
+Below are the simplest step-by-step instructions.
+
+STEP 1 — Install Nginx Ingress Controller
+
+SSH into master node.
+
+Install Helm (if not installed):
+
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+Add repo:
+
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+
+Install ingress controller:
+
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+--namespace ingress-nginx \
+--create-namespace \
+--set controller.service.type=NodePort
+STEP 2 — Get NodePort of Ingress
+
+Run:
+
+kubectl get svc -n ingress-nginx
+
+Example output:
+
+ingress-nginx-controller   NodePort
+
+Example ports:
+
+80:30080/TCP
+443:30443/TCP
+
+Write them down:
+
+HTTP  → 30080
+HTTPS → 30443
+STEP 3 — Allow Ports in Worker Security Group
+
+Go to AWS Console
+
+EC2 → Security Groups → Worker Node SG
+
+Add inbound rules:
+
+Type	Port	Source
+Custom TCP	30080	ALB Security Group
+Custom TCP	30443	ALB Security Group
+STEP 4 — Create ALB
+
+Go to:
+
+EC2 → Load Balancers → Create Load Balancer
+
+Choose:
+
+Application Load Balancer
+
+Settings:
+
+Name:
+
+k8s-public-alb
+
+Scheme:
+
+Internet-facing
+
+IP type:
+
+IPv4
+STEP 5 — Select Public Subnets
+
+Choose public subnets where internet gateway exists.
+
+Example:
+
+10.0.1.0
+10.0.2.0
+STEP 6 — Attach Security Group
+
+Create or attach SG:
+
+alb-public-sg
+
+Inbound rules:
+
+Type	Port	Source
+HTTP	80	0.0.0.0/0
+HTTPS	443	0.0.0.0/0
+STEP 7 — Create Target Group
+
+Type:
+
+Instance
+
+Protocol:
+
+HTTP
+
+Port:
+
+30080
+ingress-nginx   ingress-nginx-controller             NodePort    10.97.2.17       <none>        80:32537/TCP,443:30273/TCP   63m
+here we have to register 32537
+
+Health check path:
+
+/healthz
+
+Register target:
+
+Select worker node instance.
+
+STEP 8 — Configure Listener
+
+Listener:
+
+HTTP :80
+
+Forward to:
+
+nginx-nodeport-target-group
+
+Create ALB.
+
+STEP 9 — Verify ALB Health
+
+Go to:
+
+EC2 → Target Groups
+
+Targets should show:
+
+Healthy
+STEP 10 — Create Ingress for Your Service
+
+You already have:
+
+gateway-service
+ClusterIP
+port 30000
+
+Create file:
+
+gateway-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: api.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: gateway-service
+            port:
+              number: 30000
+
+Apply:
+
+kubectl apply -f gateway-ingress.yaml
+STEP 11 — Test with ALB DNS
+
+Go to:
+
+EC2 → Load Balancers
+
+Copy DNS:
+
+k8s-public-alb-xxxx.ap-south-1.elb.amazonaws.com
+
+Test:
+
+http://k8s-public-alb-xxxx.ap-south-1.elb.amazonaws.com
+STEP 12 — Connect Domain
+
+If using Amazon Route 53
+
+Create record:
+
+api.yourdomain.com
+
+Type:
+
+CNAME
+
+Value:
+
+k8s-public-alb-xxxx.ap-south-1.elb.amazonaws.com
