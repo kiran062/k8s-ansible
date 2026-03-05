@@ -1,0 +1,127 @@
+#!/bin/bash
+
+set -e
+
+echo "========================================="
+echo " Environment Setup (Private Registry)"
+echo "========================================="
+
+############################
+# Detect Private IP
+############################
+PRIVATE_IP=$(hostname -I | awk '{print $1}')
+echo "Detected Private IP: $PRIVATE_IP"
+
+############################
+# 1. Base dependencies
+############################
+sudo apt update
+sudo apt install -y curl git ca-certificates gnupg lsb-release software-properties-common
+
+############################
+# 2. Install NVM
+############################
+echo "Installing NVM..."
+
+export NVM_DIR="$HOME/.nvm"
+
+if [ ! -d "$NVM_DIR" ]; then
+  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+fi
+
+export NVM_DIR="$HOME/.nvm"
+source "$NVM_DIR/nvm.sh"
+
+############################
+# 3. Install Node 24
+############################
+echo "Installing Node.js v24..."
+
+nvm install 24
+nvm use 24
+nvm alias default 24
+
+echo "Node version:"
+node -v
+
+############################
+# 4. Install Prisma
+############################
+echo "Installing Prisma..."
+npm install -g prisma
+prisma -v
+
+############################
+# 5. Install Docker
+############################
+echo "Installing Docker..."
+
+sudo install -m 0755 -d /etc/apt/keyrings
+
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+  sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) \
+  signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt update
+
+sudo apt install -y \
+  docker-ce \
+  docker-ce-cli \
+  containerd.io \
+  docker-buildx-plugin \
+  docker-compose-plugin
+
+sudo systemctl enable docker
+sudo systemctl start docker
+
+sudo usermod -aG docker $USER
+
+echo "Docker version:"
+docker --version
+
+############################
+# 6. Setup Private IP Registry
+############################
+echo "Setting up Docker registry on $PRIVATE_IP:5000 ..."
+
+docker rm -f registry 2>/dev/null || true
+
+docker run -d \
+  --restart=always \
+  --name registry \
+  -p 5000:5000 \
+  registry:2
+
+############################
+# 7. Configure Docker daemon
+############################
+echo "Configuring Docker insecure registry..."
+
+sudo mkdir -p /etc/docker
+
+echo "{
+  \"insecure-registries\": [\"$PRIVATE_IP:5000\"]
+}" | sudo tee /etc/docker/daemon.json
+
+sudo systemctl restart docker
+
+echo "========================================="
+echo " Setup Complete!"
+echo "========================================="
+echo ""
+echo "Private Docker Registry:"
+echo "   $PRIVATE_IP:5000"
+echo ""
+echo "IMPORTANT:"
+echo "1. Logout and login again for docker group."
+echo "2. Test with:"
+echo "   docker pull nginx"
+echo "   docker tag nginx $PRIVATE_IP:5000/nginx"
+echo "   docker push $PRIVATE_IP:5000/nginx"
+echo "========================================="
